@@ -1,0 +1,18 @@
+{
+  "configurations": [
+    {
+      "name": "Linux",
+      "includePath": [
+        "/home/tomrobpic/Documents/Tomato-Robot-Picker-RP/include",
+        "${workspaceFolder}",
+        "/home/tomrobpic/Documents/Tomato-Robot-Picker-RP/libsrc"
+      ],
+      "defines": [],
+      "compilerPath": "/usr/bin/g++",
+      "cStandard": "c17",
+      "cppStandard": "gnu++17",
+      "intelliSenseMode": "linux-gcc-arm64"
+    }
+  ],
+  "version": 4
+}

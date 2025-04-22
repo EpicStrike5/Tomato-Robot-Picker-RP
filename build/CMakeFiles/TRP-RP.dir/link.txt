@@ -1,0 +1,2 @@
+/usr/bin/ar qc libTRP-RP.a "CMakeFiles/TRP-RP.dir/TRP-RP.cpp.o"
+/usr/bin/ranlib libTRP-RP.a

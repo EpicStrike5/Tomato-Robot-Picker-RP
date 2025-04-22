@@ -395,8 +395,3 @@ bool SerialPort::flushIO()
     }
     return true;
 }
-// --- getFD ---
-int SerialPort::getFD() const
-{
-    return serial_fd_; // Returns -1 if not open (as serial_fd_ is initialized to -1)
-}

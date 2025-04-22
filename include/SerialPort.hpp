@@ -50,6 +50,11 @@ public:
     // Flushes the input/output buffers
     bool flushIO();
 
+    // **** ADD THIS GETTER ****
+    // Returns the raw file descriptor for use with poll/select etc.
+    // Returns -1 if the port is not open.
+    int getFD() const;
+
 private:
     int serial_fd_ = -1; // File descriptor for the serial port
     bool is_open_ = false;
