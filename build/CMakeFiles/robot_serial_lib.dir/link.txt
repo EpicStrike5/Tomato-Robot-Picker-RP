@@ -1,0 +1,2 @@
+/usr/bin/ar qc librobot_serial_lib.a CMakeFiles/robot_serial_lib.dir/libsrc/SerialPort.cpp.o
+/usr/bin/ranlib librobot_serial_lib.a

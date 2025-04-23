@@ -1,402 +1,304 @@
-#include "SerialPort.hpp"
+#include "SerialPort.h"
+#include <fcntl.h>      // For fcntl, O_RDWR, O_NOCTTY, O_NONBLOCK
+#include <unistd.h>     // For read, write, close, isatty
+#include <errno.h>      // Error number definitions
+#include <string.h>     // For strerror
+#include <system_error> // For std::system_error
+#include <utility>      // For std::move
+#include <iostream>     // For cerr (error reporting)
+#include <mutex>        // For std::lock_guard
+#include <poll.h>       // For poll (if needed)
+#include <chrono>       // For std::chrono::milliseconds
+#include <thread>       // For std::this_thread::sleep_for
 
-#include <iostream>
-#include <cstring>   // For strerror, memset
-#include <cerrno>    // For errno
-#include <fcntl.h>   // Contains file controls like O_RDWR
-#include <unistd.h>  // write(), read(), close(), usleep
-#include <poll.h>    // For poll()
-#include <stdexcept> // Optional: for throwing exceptions
-
-// --- Constructor ---
-SerialPort::SerialPort() : serial_fd_(-1), is_open_(false), baud_rate_(0)
+// Constructor: Opens port, sets O_NONBLOCK using fcntl
+SerialPort::SerialPort(const std::string &port_name, speed_t baud_rate)
+    : port_name_(port_name)
 {
-    // Initialize buffer or other members if needed
-}
 
-// --- Destructor ---
-SerialPort::~SerialPort()
-{
-    if (is_open_)
+    // Open in Read/Write mode, without becoming controlling terminal
+    // We'll add O_NONBLOCK later with fcntl for clarity.
+    fd = open(port_name_.c_str(), O_RDWR | O_NOCTTY);
+
+    if (fd < 0)
     {
-        closePort();
-    }
-}
-
-// --- openPort ---
-bool SerialPort::openPort(const std::string &portName, int baudRate)
-{
-    if (is_open_)
-    {
-        std::cerr << "Warning: Port " << port_name_ << " already open. Closing first." << std::endl;
-        closePort();
+        throw std::system_error(errno, std::system_category(),
+                                "Error opening serial port " + port_name_);
     }
 
-    port_name_ = portName;
-    baud_rate_ = baudRate;
-
-    // O_RDWR: Read/Write access
-    // O_NOCTTY: Don't become the process's controlling terminal
-    // O_NDELAY: Non-blocking open (we'll make it blocking later with fcntl)
-    // O_EXCL: Ensure that we are creating the file (fails if it already exists - not typical for devices)
-    // O_NONBLOCK: POSIX standard non-blocking I/O
-    serial_fd_ = open(port_name_.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
-
-    if (serial_fd_ < 0)
+    // Check if it's actually a serial device (optional but good practice)
+    if (!isatty(fd))
     {
-        std::cerr << "Error " << errno << " opening " << port_name_ << ": " << strerror(errno) << std::endl;
-        return false;
+        ::close(fd);
+        throw std::runtime_error("Device " + port_name_ + " is not a TTY (serial port).");
     }
 
-    // Make the file descriptor blocking for reads by default (can use timeout in readSerial)
-    // We remove O_NONBLOCK set during open
-    int flags = fcntl(serial_fd_, F_GETFL, 0);
+    // Set to non-blocking mode AFTER successful open
+    int flags = fcntl(fd, F_GETFL, 0);
     if (flags == -1)
     {
-        std::cerr << "Error " << errno << " getting flags for " << port_name_ << ": " << strerror(errno) << std::endl;
-        close(serial_fd_);
-        serial_fd_ = -1;
-        return false;
-    }
-    if (fcntl(serial_fd_, F_SETFL, flags & ~O_NONBLOCK) == -1)
-    {
-        std::cerr << "Error " << errno << " setting blocking mode for " << port_name_ << ": " << strerror(errno) << std::endl;
-        close(serial_fd_);
-        serial_fd_ = -1;
-        return false;
+        int errsv = errno; // Save errno before close potentially changes it
+        ::close(fd);
+        throw std::system_error(errsv, std::system_category(), "Error getting serial port flags (fcntl F_GETFL)");
     }
 
-    // Get current settings and store old ones (optional)
-    if (tcgetattr(serial_fd_, &tty_settings_) != 0)
-    {
-        std::cerr << "Error " << errno << " from tcgetattr: " << strerror(errno) << std::endl;
-        close(serial_fd_);
-        serial_fd_ = -1;
-        return false;
-    }
-    tty_old_settings_ = tty_settings_; // Save old settings
+    flags |= O_NONBLOCK; // Add the non-blocking flag
 
-    if (!configureTermios(baudRate))
+    if (fcntl(fd, F_SETFL, flags) == -1)
     {
-        // Restore old settings if configuration failed
-        tcsetattr(serial_fd_, TCSANOW, &tty_old_settings_);
-        close(serial_fd_);
-        serial_fd_ = -1;
-        return false;
+        int errsv = errno;
+        ::close(fd);
+        throw std::system_error(errsv, std::system_category(), "Error setting serial port to non-blocking (fcntl F_SETFL)");
     }
 
-    // Flush port to clear any existing data
-    if (!flushIO())
+    // Now configure termios settings
+    try
     {
-        // Warning or error? Depends on how critical flushing is.
-        std::cerr << "Warning: Failed to flush IO buffers on port open." << std::endl;
+        configurePort(baud_rate); // Configure termios settings
+        is_open_ = true;
+        tcflush(fd, TCIOFLUSH); // Flush any stale data in buffers
     }
-
-    is_open_ = true;
-    std::cout << "Serial port " << port_name_ << " opened successfully." << std::endl;
-    return true;
-}
-
-// --- configureTermios (Private Helper) ---
-bool SerialPort::configureTermios(int baudRate)
-{
-    // Set Baud Rate
-    speed_t speed;
-    switch (baudRate)
+    catch (...)
     {
-    case 9600:
-        speed = B9600;
-        break;
-    case 19200:
-        speed = B19200;
-        break;
-    case 38400:
-        speed = B38400;
-        break; // Added common rate
-    case 57600:
-        speed = B57600;
-        break;
-    case 115200:
-        speed = B115200;
-        break;
-    case 230400:
-        speed = B230400;
-        break; // Added common rate
-    default:
-        std::cerr << "Warning: Unsupported baud rate " << baudRate << ". Using 115200." << std::endl;
-        speed = B115200;
-        baud_rate_ = 115200; // Update the stored rate
-        break;
-    }
-    if (cfsetospeed(&tty_settings_, speed) != 0 || cfsetispeed(&tty_settings_, speed) != 0)
-    {
-        std::cerr << "Error " << errno << " setting baud rate: " << strerror(errno) << std::endl;
-        return false;
-    }
-
-    // Set Control Modes (c_cflag)
-    tty_settings_.c_cflag &= ~PARENB;        // Disable parity
-    tty_settings_.c_cflag &= ~CSTOPB;        // Use one stop bit
-    tty_settings_.c_cflag &= ~CSIZE;         // Clear data size bits
-    tty_settings_.c_cflag |= CS8;            // 8 data bits
-    tty_settings_.c_cflag &= ~CRTSCTS;       // Disable hardware flow control
-    tty_settings_.c_cflag |= CREAD | CLOCAL; // Turn on READ & ignore ctrl lines (CLOCAL = 1)
-
-    // Set Local Modes (c_lflag) - Non-Canonical mode
-    tty_settings_.c_lflag &= ~ICANON; // Disable canonical mode (line buffering)
-    tty_settings_.c_lflag &= ~ECHO;   // Disable echo
-    tty_settings_.c_lflag &= ~ECHOE;  // Disable erasure
-    tty_settings_.c_lflag &= ~ECHONL; // Disable newline echo
-    tty_settings_.c_lflag &= ~ISIG;   // Disable interpretation of INTR, QUIT and SUSP
-
-    // Set Input Modes (c_iflag)
-    tty_settings_.c_iflag &= ~(IXON | IXOFF | IXANY);                                      // Turn off s/w flow ctrl
-    tty_settings_.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL); // Disable special handling of received bytes
-
-    // Set Output Modes (c_oflag)
-    tty_settings_.c_oflag &= ~OPOST; // Prevent special interpretation of output bytes
-    tty_settings_.c_oflag &= ~ONLCR; // Prevent conversion of newline to carriage return/line feed
-
-    // Set VMIN and VTIME (for non-canonical mode)
-    // VMIN = 0, VTIME = 0: Non-blocking read. read() returns immediately.
-    // VMIN > 0, VTIME = 0: Blocking read until VMIN bytes received.
-    // VMIN = 0, VTIME > 0: Read with timeout. Blocks until VTIME * 0.1 seconds passes or data is received.
-    // VMIN > 0, VTIME > 0: Read with inter-byte timeout. Timer starts after first byte.
-    // We will handle timeouts using poll() instead of VTIME, so set VMIN/VTIME for non-blocking reads within termios
-    tty_settings_.c_cc[VTIME] = 0; // No timeout within termios read itself
-    tty_settings_.c_cc[VMIN] = 0;  // Read returns immediately with available bytes
-
-    // Apply the settings
-    if (tcsetattr(serial_fd_, TCSANOW, &tty_settings_) != 0)
-    {
-        std::cerr << "Error " << errno << " from tcsetattr: " << strerror(errno) << std::endl;
-        return false;
-    }
-
-    return true;
-}
-
-// --- closePort ---
-void SerialPort::closePort()
-{
-    if (is_open_)
-    {
-        // Optional: Restore old terminal settings
-        // tcsetattr(serial_fd_, TCSANOW, &tty_old_settings_);
-
-        if (close(serial_fd_) != 0)
+        // Ensure port is closed if configurePort throws
+        if (fd >= 0)
         {
-            std::cerr << "Error " << errno << " closing port " << port_name_ << ": " << strerror(errno) << std::endl;
+            ::close(fd);
         }
-        std::cout << "Serial port " << port_name_ << " closed." << std::endl;
-        is_open_ = false;
-        serial_fd_ = -1;
-        port_name_ = "";
-        baud_rate_ = 0;
-        read_buffer_.clear(); // Clear internal buffer on close
+        throw; // Re-throw the exception
+    }
+
+    // Use std::cerr for initial status messages as stdout might be used differently
+    std::cerr << "Serial port " << port_name_ << " opened successfully (non-blocking)." << std::endl;
+}
+
+// Destructor
+SerialPort::~SerialPort()
+{
+    closePort();
+}
+
+// Move Constructor
+SerialPort::SerialPort(SerialPort &&other) noexcept
+    : fd(other.fd), port_name_(std::move(other.port_name_)),
+      is_open_(other.is_open_), tty_config_(other.tty_config_)
+// Mutex is not moved; the new object gets its own default state.
+{
+    // Prevent the moved-from object's destructor from closing the file descriptor
+    other.fd = -1;
+    other.is_open_ = false;
+}
+
+// Move Assignment Operator
+SerialPort &SerialPort::operator=(SerialPort &&other) noexcept
+{
+    if (this != &other)
+    {
+        // Lock guard ensures mutex safety even during the move
+        std::lock_guard<std::mutex> this_lock(port_mutex_); // Lock current mutex before modifying state
+
+        closePort(); // Close the current port if open
+
+        // Move resources (no mutex needed for 'other' if we invalidate it)
+        fd = other.fd;
+        port_name_ = std::move(other.port_name_);
+        is_open_ = other.is_open_;
+        tty_config_ = other.tty_config_;
+
+        // Prevent the moved-from object's destructor from closing the file descriptor
+        other.fd = -1;
+        other.is_open_ = false;
+    }
+    return *this;
+}
+
+// configurePort: Sets RAW mode and VMIN=0, VTIME=0 for non-blocking
+void SerialPort::configurePort(speed_t baud_rate)
+{
+    // Get current attributes
+    if (tcgetattr(fd, &tty_config_) != 0)
+    {
+        throw std::system_error(errno, std::system_category(), "Error from tcgetattr");
+    }
+
+    // --- Set flags for RAW mode ---
+    // Control Modes (c_cflag)
+    tty_config_.c_cflag &= ~PARENB;        // No parity
+    tty_config_.c_cflag &= ~CSTOPB;        // 1 stop bit
+    tty_config_.c_cflag &= ~CSIZE;         // Clear data size bits
+    tty_config_.c_cflag |= CS8;            // 8 data bits
+    tty_config_.c_cflag &= ~CRTSCTS;       // No hardware flow control
+    tty_config_.c_cflag |= CREAD | CLOCAL; // Enable receiver, ignore modem status lines
+
+    // Local Modes (c_lflag)
+    tty_config_.c_lflag &= ~ICANON; // Disable canonical mode (line-by-line)
+    tty_config_.c_lflag &= ~ECHO;   // Disable echoing input characters
+    tty_config_.c_lflag &= ~ECHOE;  // Disable echo erase
+    tty_config_.c_lflag &= ~ECHONL; // Disable echo newline
+    tty_config_.c_lflag &= ~ISIG;   // Disable interpretation of INTR, QUIT, SUSP signals
+
+    // Input Modes (c_iflag)
+    tty_config_.c_iflag &= ~(IXON | IXOFF | IXANY);                                      // Disable software flow control
+    tty_config_.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL); // Disable special input handling
+
+    // Output Modes (c_oflag)
+    tty_config_.c_oflag &= ~OPOST; // Disable implementation-defined output processing
+    tty_config_.c_oflag &= ~ONLCR; // Disable map NL to CR-NL
+
+    // --- Set VMIN and VTIME for Non-blocking read() ---
+    // With O_NONBLOCK set on the file descriptor:
+    // VMIN = 0, VTIME = 0: read() returns immediately.
+    // Returns bytes read (1 to n) if data is available.
+    // Returns 0 if EOF (rare for serial).
+    // Returns -1 with errno EAGAIN or EWOULDBLOCK if no data is available.
+    tty_config_.c_cc[VMIN] = 0;
+    tty_config_.c_cc[VTIME] = 0;
+
+    // Set Baud Rate
+    if (cfsetispeed(&tty_config_, baud_rate) != 0)
+    {
+        throw std::system_error(errno, std::system_category(), "Error setting input baud rate");
+    }
+    if (cfsetospeed(&tty_config_, baud_rate) != 0)
+    {
+        throw std::system_error(errno, std::system_category(), "Error setting output baud rate");
+    }
+
+    // Apply the attributes
+    if (tcsetattr(fd, TCSANOW, &tty_config_) != 0)
+    {
+        throw std::system_error(errno, std::system_category(), "Error from tcsetattr");
     }
 }
 
-// --- isOpen ---
+// writeString: Calls writeBytes
+void SerialPort::writeString(const std::string &data)
+{
+    writeBytes(reinterpret_cast<const uint8_t *>(data.c_str()), data.length());
+}
+
+// writeBytes: Includes mutex lock
+void SerialPort::writeBytes(const uint8_t *buffer, size_t size)
+{
+    std::lock_guard<std::mutex> lock(port_mutex_); // Lock the mutex
+    if (!is_open_ || fd < 0)
+    {
+        throw std::runtime_error("Serial port is not open or invalid for writing.");
+    }
+
+    ssize_t total_bytes_written = 0;
+    while (total_bytes_written < static_cast<ssize_t>(size))
+    {
+        ssize_t bytes_written = ::write(fd, buffer + total_bytes_written, size - total_bytes_written);
+
+        if (bytes_written < 0)
+        {
+            // EAGAIN/EWOULDBLOCK might occur even for write in non-blocking, means try again later
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1)); // Avoid busy-wait on write
+                continue;                                                  // Retry write
+            }
+            else
+            {
+                throw std::system_error(errno, std::system_category(), "Error writing to serial port");
+            }
+        }
+        if (bytes_written == 0)
+        {
+            // Should not happen for regular files or serial ports, but handle defensively
+            std::cerr << "Warning: write() returned 0, potential issue." << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        total_bytes_written += bytes_written;
+    }
+
+    // Optional: Ensure data is physically transmitted before returning
+    // if (tcdrain(fd) == -1) {
+    //     std::cerr << "Warning: tcdrain failed: " << strerror(errno) << std::endl;
+    // }
+
+} // Mutex automatically unlocked here by lock_guard destructor
+
+// readBytes: Handles non-blocking reads and EAGAIN/EWOULDBLOCK
+ssize_t SerialPort::readBytes(uint8_t *buffer, size_t buffer_size)
+{
+    std::lock_guard<std::mutex> lock(port_mutex_); // Lock mutex
+    if (!is_open_ || fd < 0)
+    {
+        throw std::runtime_error("Serial port is not open or invalid for reading.");
+    }
+    if (buffer == nullptr || buffer_size == 0)
+    {
+        throw std::invalid_argument("Read buffer is null or buffer_size is zero.");
+    }
+
+    // Perform the non-blocking read
+    ssize_t bytes_read = ::read(fd, buffer, buffer_size);
+
+    if (bytes_read < 0)
+    {
+        // In non-blocking mode, EAGAIN or EWOULDBLOCK simply means "no data available now"
+        if (errno == EAGAIN || errno == EWOULDBLOCK)
+        {
+            return 0; // Indicate no data was read this time (not an error)
+        }
+        else
+        {
+            // It's a real error
+            throw std::system_error(errno, std::system_category(), "Error reading from serial port");
+        }
+    }
+    // If bytes_read == 0: Could mean EOF (e.g., device disconnected). Pass it up.
+    // If bytes_read > 0: Data was read successfully.
+
+    return bytes_read;
+} // Mutex unlocked
+
+// isOpen: Checks the flag
 bool SerialPort::isOpen() const
 {
+    // Reading bool should be atomic enough, mutex optional for strictness
+    // std::lock_guard<std::mutex> lock(port_mutex_);
     return is_open_;
 }
 
-// --- writeSerial ---
-ssize_t SerialPort::writeSerial(const void *data, size_t len)
+// closePort: Includes mutex lock
+void SerialPort::closePort()
 {
-    if (!is_open_)
+    std::lock_guard<std::mutex> lock(port_mutex_); // Lock the mutex
+    if (is_open_ && fd >= 0)
     {
-        std::cerr << "Error: Port not open for writing." << std::endl;
-        return -1;
-    }
-    ssize_t bytes_written = write(serial_fd_, data, len);
-    if (bytes_written < 0)
-    {
-        std::cerr << "Error " << errno << " writing to serial port " << port_name_ << ": " << strerror(errno) << std::endl;
-    }
-    else if (bytes_written < len)
-    {
-        std::cerr << "Warning: Only wrote " << bytes_written << " out of " << len << " bytes to " << port_name_ << "." << std::endl;
-        // Consider adding retry logic here if needed
-    }
-    return bytes_written;
-}
-
-// --- writeString ---
-bool SerialPort::writeString(const std::string &data)
-{
-    // Note: This now sends the string *exactly* as provided.
-    // The caller needs to add '\n' if required by the protocol.
-    return writeSerial(data.c_str(), data.length()) == (ssize_t)data.length();
-}
-
-// --- readSerial ---
-ssize_t SerialPort::readSerial(void *buffer, size_t len, int timeout_ms)
-{
-    if (!is_open_)
-    {
-        std::cerr << "Error: Port not open for reading." << std::endl;
-        return -1;
-    }
-    if (len == 0)
-    {
-        return 0; // Nothing to read
-    }
-
-    struct pollfd fds[1];
-    fds[0].fd = serial_fd_;
-    fds[0].events = POLLIN; // Check for data to read
-
-    // poll() modifies timeout value on some systems, so pass a copy if needed
-    int poll_timeout = (timeout_ms < 0) ? -1 : timeout_ms; // -1 for infinite wait
-
-    int poll_ret = poll(fds, 1, poll_timeout);
-
-    if (poll_ret < 0)
-    {
-        std::cerr << "Error " << errno << " polling serial port " << port_name_ << ": " << strerror(errno) << std::endl;
-        return -1; // Poll error
-    }
-    else if (poll_ret == 0)
-    {
-        return 0; // Timeout
-    }
-    else
-    {
-        // Data is available
-        if (fds[0].revents & POLLIN)
+        std::cerr << "Closing serial port " << port_name_ << std::endl;
+        if (::close(fd) < 0)
         {
-            ssize_t num_bytes = read(serial_fd_, buffer, len);
-            if (num_bytes < 0)
-            {
-                // EWOULDBLOCK or EAGAIN might mean no data ready yet (though poll said yes), treat as 0 bytes read?
-                // Or a genuine read error
-                if (errno == EAGAIN || errno == EWOULDBLOCK)
-                {
-                    return 0; // Or retry? Let's return 0 as no data was actually read this call.
-                }
-                else
-                {
-                    std::cerr << "Error " << errno << " reading from serial port " << port_name_ << ": " << strerror(errno) << std::endl;
-                    return -1; // Read error
-                }
-            }
-            // num_bytes >= 0 is success (could be 0 if VMIN/VTIME caused read to return 0)
-            return num_bytes;
-        }
-        else if (fds[0].revents & (POLLERR | POLLHUP | POLLNVAL))
-        {
-            // An error occurred on the file descriptor
-            std::cerr << "Error event " << fds[0].revents << " on serial port " << port_name_ << std::endl;
-            // Consider closing the port or signalling a major error
-            return -1; // Indicate error
+            // Log error, but destructor shouldn't throw
+            std::cerr << "Error closing serial port " << port_name_ << ": " << strerror(errno) << std::endl;
         }
     }
-    return -1; // Should not be reached, but covers unexpected cases
-}
+    fd = -1;
+    is_open_ = false;
+} // Mutex unlocked
 
-// --- readLine ---
-std::string SerialPort::readLine(int timeout_ms)
+// intToSpeedT: Helper function
+speed_t SerialPort::intToSpeedT(int baud)
 {
-    if (!is_open_)
+    switch (baud)
     {
-        std::cerr << "Error: Port not open for reading line." << std::endl;
-        return "";
+    case 9600:
+        return B9600;
+    case 19200:
+        return B19200;
+    case 38400:
+        return B38400;
+    case 57600:
+        return B57600;
+    case 115200:
+        return B115200;
+    case 230400:
+        return B230400;
+    // Add other common rates if needed
+    default:
+        throw std::invalid_argument("Unsupported baud rate: " + std::to_string(baud));
     }
-
-    // Check internal buffer first
-    size_t newline_pos = read_buffer_.find('\n');
-    if (newline_pos != std::string::npos)
-    {
-        std::string line = read_buffer_.substr(0, newline_pos);
-        read_buffer_.erase(0, newline_pos + 1); // Remove line and newline char
-        return line;
-    }
-
-    // If no complete line in buffer, try reading more data
-    char temp_buf[256]; // Read in chunks
-    int elapsed_time = 0;
-    const int poll_interval = 10; // Check for data every 10ms
-
-    while (timeout_ms < 0 || elapsed_time < timeout_ms)
-    {
-        int current_timeout = (timeout_ms < 0) ? -1 : std::max(0, timeout_ms - elapsed_time);
-        // If timeout_ms is positive, calculate remaining time for poll
-        // If timeout_ms is negative (infinite), use -1 for poll
-        // Limit poll interval slightly to avoid busy-wait if timeout_ms is small
-        if (timeout_ms > 0)
-        {
-            current_timeout = std::min(poll_interval, current_timeout);
-        }
-
-        ssize_t bytes_read = readSerial(temp_buf, sizeof(temp_buf) - 1, current_timeout);
-
-        if (bytes_read < 0)
-        { // Error
-            // Error message already printed by readSerial
-            return ""; // Return empty string on error
-        }
-
-        if (bytes_read > 0)
-        {
-            temp_buf[bytes_read] = '\0';               // Null-terminate C-string style
-            read_buffer_.append(temp_buf, bytes_read); // Append to internal buffer
-
-            // Check again for newline
-            newline_pos = read_buffer_.find('\n');
-            if (newline_pos != std::string::npos)
-            {
-                std::string line = read_buffer_.substr(0, newline_pos);
-                // Handle potential '\r\n' by checking if '\r' precedes '\n'
-                if (newline_pos > 0 && line.back() == '\r')
-                {
-                    line.pop_back(); // Remove trailing '\r'
-                }
-                read_buffer_.erase(0, newline_pos + 1); // Remove line and newline char
-                return line;
-            }
-        }
-        // else bytes_read == 0 (timeout on this read attempt)
-
-        if (timeout_ms > 0)
-        {
-            elapsed_time += (bytes_read >= 0) ? current_timeout : poll_interval; // Increment elapsed time
-            // If bytes_read < 0 (error), we break anyway. If bytes_read == 0 (timeout), we increment.
-            // If bytes_read > 0, we still consumed time polling/reading.
-            if (elapsed_time >= timeout_ms)
-                break; // Exit loop if total timeout exceeded
-        }
-        // If timeout_ms < 0 (infinite), loop continues until line found or error
-    }
-
-    // Timeout occurred before newline was found, or infinite wait was interrupted by error
-    // Return whatever might be in the buffer (partial line) or empty string?
-    // Standard behavior is often to return empty on timeout.
-    return ""; // Timeout or error
-}
-
-// --- flushIO ---
-bool SerialPort::flushIO()
-{
-    if (!is_open_)
-    {
-        std::cerr << "Error: Port not open for flushing." << std::endl;
-        return false;
-    }
-    // TCIOFLUSH: Flushes data received but not read, and data written but not transmitted.
-    // TCIFLUSH: Flushes data received but not read.
-    // TCOFLUSH: Flushes data written but not transmitted.
-    if (tcflush(serial_fd_, TCIOFLUSH) == -1)
-    {
-        std::cerr << "Error " << errno << " flushing serial port " << port_name_ << ": " << strerror(errno) << std::endl;
-        return false;
-    }
-    return true;
-}
-// --- getFD ---
-int SerialPort::getFD() const
-{
-    return serial_fd_; // Returns -1 if not open (as serial_fd_ is initialized to -1)
 }

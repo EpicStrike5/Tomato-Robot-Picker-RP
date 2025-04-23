@@ -5,26 +5,48 @@ cmake_minimum_required(VERSION 3.10)
 project(TomatoRobotPicker LANGUAGES CXX)
 
 # Set C++ standard (e.g., C++17)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 17) # Or 11, 14 as needed
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-# --- Library Definition ---
-add_library(serialport libsrc/SerialPort.cpp)
+# --- Find External Packages using pkg-config ---
+find_package(PkgConfig REQUIRED) 
+pkg_check_modules(SerialPort REQUIRED libserialport) 
+message(STATUS "Found libserialport via pkg-config:") 
+message(STATUS "  Include Dirs: ${SerialPort_INCLUDE_DIRS}")
+message(STATUS "  Libraries: ${SerialPort_LIBRARIES}")
 
-# Specify that the public include directory for the 'serialport' library
-target_include_directories(serialport PUBLIC ${CMAKE_SOURCE_DIR}/include)
+
+# --- Your Library Definition ---
+set(ROBOT_SERIAL_LIB_NAME robot_serial_lib) 
+# *** CORRECTED: Only list SOURCE files (.cpp) for add_library ***
+add_library(${ROBOT_SERIAL_LIB_NAME} STATIC 
+    libsrc/SerialPort.cpp 
+)
+
+# Specify include directories needed by your library and consumers
+# PUBLIC means both the library itself and consumers (like main) can see these paths.
+# *** CORRECTED: Point to your 'include' directory and the libserialport includes ***
+target_include_directories(${ROBOT_SERIAL_LIB_NAME} PUBLIC 
+    ${CMAKE_CURRENT_SOURCE_DIR}/include  # <<< Your header directory
+    ${SerialPort_INCLUDE_DIRS}          # <<< Include paths found by pkg-config
+)
 
 
 # --- Executable Definition ---
+# Assuming main.cpp is in src/
 add_executable(main src/main.cpp)
 
-# Link the main executable against the serialport library
-target_link_libraries(main PRIVATE serialport)
+# --- Linking ---
+# Link the main executable against YOUR library AND the system's libserialport library
+# Use the variables provided by pkg_check_modules
+target_link_libraries(main PRIVATE 
+    ${ROBOT_SERIAL_LIB_NAME}  # Link against your wrapper library
+    ${SerialPort_LIBRARIES}   # <<< Link against library name(s) found by pkg-config
+)
 
-# Optional: Place the executable directly in the build folder root
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
-# Optional: Print status message
+# --- Status Messages ---
 message(STATUS "Configuring TomatoRobotPicker project...")
 message(STATUS "  Executable target: main")
-message(STATUS "  Library target: serialport")
+message(STATUS "  Library target: ${ROBOT_SERIAL_LIB_NAME}")
+message(STATUS "  Linking main against: ${ROBOT_SERIAL_LIB_NAME} and libraries [${SerialPort_LIBRARIES}]")

@@ -117,17 +117,17 @@ depend:
 .PHONY : depend
 
 #=============================================================================
-# Target rules for targets named serialport
+# Target rules for targets named robot_serial_lib
 
 # Build rule for target.
-serialport: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 serialport
-.PHONY : serialport
+robot_serial_lib: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 robot_serial_lib
+.PHONY : robot_serial_lib
 
 # fast build rule for target.
-serialport/fast:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/serialport.dir/build.make CMakeFiles/serialport.dir/build
-.PHONY : serialport/fast
+robot_serial_lib/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/robot_serial_lib.dir/build.make CMakeFiles/robot_serial_lib.dir/build
+.PHONY : robot_serial_lib/fast
 
 #=============================================================================
 # Target rules for targets named main
@@ -147,7 +147,7 @@ libsrc/SerialPort.o: libsrc/SerialPort.cpp.o
 
 # target to build an object file
 libsrc/SerialPort.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/serialport.dir/build.make CMakeFiles/serialport.dir/libsrc/SerialPort.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/robot_serial_lib.dir/build.make CMakeFiles/robot_serial_lib.dir/libsrc/SerialPort.cpp.o
 .PHONY : libsrc/SerialPort.cpp.o
 
 libsrc/SerialPort.i: libsrc/SerialPort.cpp.i
@@ -155,7 +155,7 @@ libsrc/SerialPort.i: libsrc/SerialPort.cpp.i
 
 # target to preprocess a source file
 libsrc/SerialPort.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/serialport.dir/build.make CMakeFiles/serialport.dir/libsrc/SerialPort.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/robot_serial_lib.dir/build.make CMakeFiles/robot_serial_lib.dir/libsrc/SerialPort.cpp.i
 .PHONY : libsrc/SerialPort.cpp.i
 
 libsrc/SerialPort.s: libsrc/SerialPort.cpp.s
@@ -163,7 +163,7 @@ libsrc/SerialPort.s: libsrc/SerialPort.cpp.s
 
 # target to generate assembly for a file
 libsrc/SerialPort.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/serialport.dir/build.make CMakeFiles/serialport.dir/libsrc/SerialPort.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/robot_serial_lib.dir/build.make CMakeFiles/robot_serial_lib.dir/libsrc/SerialPort.cpp.s
 .PHONY : libsrc/SerialPort.cpp.s
 
 src/main.o: src/main.cpp.o
@@ -199,7 +199,7 @@ help:
 	@echo "... edit_cache"
 	@echo "... rebuild_cache"
 	@echo "... main"
-	@echo "... serialport"
+	@echo "... robot_serial_lib"
 	@echo "... libsrc/SerialPort.o"
 	@echo "... libsrc/SerialPort.i"
 	@echo "... libsrc/SerialPort.s"
