@@ -194,9 +194,12 @@ PKG_CONFIG_ARGN:STRING=
 //pkg-config executable
 PKG_CONFIG_EXECUTABLE:FILEPATH=/usr/bin/pkg-config
 
+<<<<<<< HEAD
 //The directory containing a CMake configuration file for SerialPort.
 SerialPort_DIR:PATH=SerialPort_DIR-NOTFOUND
 
+=======
+>>>>>>> 75a029d (Add SerialPort library and update main application)
 //Value Computed by CMake
 TomatoRobotPicker_BINARY_DIR:STATIC=/home/tomrobpic/Documents/Tomato-Robot-Picker-RP/build
 
