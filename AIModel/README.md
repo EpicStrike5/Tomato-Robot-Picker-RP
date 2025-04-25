@@ -4,11 +4,11 @@ This directory contains information related to the AI model used for tomato dete
 
 ## Dataset
 
-The dataset used to train this model was meticulously gathered and processed using [Roboflow](https://roboflow.com/). Roboflow facilitated the crucial steps of data annotation, augmentation, and splitting into standardized sets:
+The image dataset for this model was prepared using [Roboflow](https://roboflow.com/). The dataset, which is also available for download separately, is organized into the standard splits:
 
-- **Training Set:** Used to teach the model.
-- **Validation Set:** Used to fine-tune model hyperparameters during training.
-- **Test Set:** Used for final evaluation of the trained model's performance.
+- **Train:** Used for training the model.
+- **Validate:** Used for tuning during training.
+- **Test:** Used for final evaluation.
 
 ## Model Access & Download
 
@@ -22,17 +22,17 @@ However, the model is publicly available and hosted on Ultralytics Hub. You can 
 
 ---
 
-# AI モデル情報：トマト検出 (Japanese Translation)
+# AI モデル情報：トマト検出
 
 このディレクトリには、本プロジェクトでトマト検出に使用される AI モデルに関する情報が含まれています。
 
 ## データセット
 
-このモデルのトレーニングに使用されたデータセットは、[Roboflow](https://roboflow.com/) を使用して慎重に収集・処理されました。Roboflow は、データのアノテーション、拡張、そして標準的なセットへの分割といった重要なステップを支援しました：
+このモデルの画像データセットの準備には [Roboflow](https://roboflow.com/) を使用しました。このデータセットは、別途ダウンロードも可能で、標準的な分割に整理されています：
 
-- **トレーニングセット (Training Set):** モデルの学習に使用。
-- **検証セット (Validation Set):** トレーニング中のモデルのハイパーパラメータ調整に使用。
-- **テストセット (Test Set):** トレーニング済みモデルの最終的な性能評価に使用。
+- **Train（訓練）:** モデルのトレーニングに使用。
+- **Validate（検証）:** トレーニング中のチューニングに使用。
+- **Test（テスト）:** 最終評価に使用。
 
 ## モデルへのアクセスとダウンロード
 
