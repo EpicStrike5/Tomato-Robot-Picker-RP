@@ -1,5 +1,80 @@
-# Ignore the following files and directories
-.vscode/settings.json
-.vscode/tasks.json
-.vscode
-.AiModel/TomatoDetectBTV1.onnx
+#Ai Models 
+AIModel/
+!AIModel/README.md
+
+# IDE specific files (Visual Studio Code)
+.vscode/
+
+### C++ Build System ###
+# Build directories (CMake, Make, etc.)
+# Use **/ to ignore directories anywhere in the project
+**/build/
+**/Build/
+**/build-*/ # Catches build-debug, build-release etc.
+**/[Bb]in/
+**/[Ll]ib/
+
+# CMake generated files (often in build dir, but good practice)
+CMakeCache.txt
+CMakeLists.txt.user
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+
+# Make generated files (often in build dir)
+Makefile
+
+### Compiled Artifacts ###
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+# Add specific executable names if they lack extensions and might appear outside ignored dirs
+# main
+
+### Other ###
+# Fortran module files (remove if unused)
+*.mod
+*.smod
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Editor backup files
+*~
+*.swp
+*.swo
+*.bak
+
+# Debugger Files
+*.stackdump
+*.suo
+*.user
+*.ilk
+*.pdb
