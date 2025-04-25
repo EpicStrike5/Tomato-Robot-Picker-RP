@@ -1,3 +1,5 @@
 # Ignore the following files and directories
 .vscode/settings.json
 .vscode/tasks.json
+.vscode
+.AiModel/TomatoDetectBTV1.onnx
