@@ -4,11 +4,15 @@ This directory contains information related to the AI model used for tomato dete
 
 ## Dataset
 
-The image dataset for this model was prepared using [Roboflow](https://roboflow.com/). The dataset, which is also available for download separately, is organized into the standard splits:
+We used [Roboflow](https://roboflow.com/) to prepare the image dataset for this model. The dataset is organized into the standard splits:
 
 - **Train:** Used for training the model.
 - **Validate:** Used for tuning during training.
 - **Test:** Used for final evaluation.
+
+If you wish to retrain the model or inspect the data, you can download the complete dataset (ZIP archive) from the following link:
+
+➡️ **[Download Tomato Dataset (MEGA.nz)](https://mega.nz/file/Gdd1yQ7Y#XgeF-OmfwyFg4fJsazg84tZfSf8YbSU1mU48wlkKB7c)**
 
 ## Model Access & Download
 
@@ -28,11 +32,15 @@ However, the model is publicly available and hosted on Ultralytics Hub. You can 
 
 ## データセット
 
-このモデルの画像データセットの準備には [Roboflow](https://roboflow.com/) を使用しました。このデータセットは、別途ダウンロードも可能で、標準的な分割に整理されています：
+このモデルの画像データセットの準備には [Roboflow](https://roboflow.com/) を使用しました。データセットは標準的な分割に整理されています：
 
 - **Train（訓練）:** モデルのトレーニングに使用。
 - **Validate（検証）:** トレーニング中のチューニングに使用。
 - **Test（テスト）:** 最終評価に使用。
+
+モデルの再トレーニングやデータを確認したい場合は、以下のリンクから完全なデータセット（ZIP アーカイブ）をダウンロードできます：
+
+➡️ **[トマトデータセット ダウンロード (MEGA.nz)](https://mega.nz/file/Gdd1yQ7Y#XgeF-OmfwyFg4fJsazg84tZfSf8YbSU1mU48wlkKB7c)**
 
 ## モデルへのアクセスとダウンロード
 
