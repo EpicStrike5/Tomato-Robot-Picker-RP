@@ -22,9 +22,12 @@ const speed_t SERIAL_BAUD = B115200;
 const std::string TOMATO_MODEL_PATH = "AIModel/TomatoDetectBTV1.onnx"; // ADJUST PATH to your .onnx file
 const std::string TOMATO_CLASS_NAMES_PATH = "AIModel/tomato.names";    // ADJUST PATH to your .names file
 const std::string TEST_IMAGE_FOLDER_PATH = "AIModel/Test_images/";     // ADJUST PATH
-// --- Use thresholds defined in YOLO12.hpp or redefine if needed ---
-// const float YOLO_CONF_THRESHOLD = 0.4f; // Defined in YOLO12.hpp as CONFIDENCE_THRESHOLD
-// const float YOLO_IOU_THRESHOLD = 0.45f; // Defined in YOLO12.hpp as IOU_THRESHOLD
+const std::string OUTPUT_IMAGE_FOLDER_PATH = "AIModel/Output_images/"; // ** NEW: Path to save results **
+
+// --- ** NEW: Adjustable Thresholds for Experimentation ** ---
+const float DETECT_CONF_THRESHOLD = 0.4f; // Default 0.4f - Try lowering (e.g., 0.25f)
+const float DETECT_IOU_THRESHOLD = 0.45f; // Default 0.45f - Try adjusting slightly if needed
+
 const bool USE_GPU_IF_AVAILABLE = false; // Set to false for Raspberry Pi CPU usually
 
 // Global atomic flag to signal threads to stop
@@ -81,7 +84,7 @@ void read_from_arduino(SerialPort &serial_port)
                         {
                             complete_line.pop_back();
                         }
-                                        }
+                    }
                     // Ensure prompt appears correctly after Arduino message
                     std::cout << "\nArduino: " << complete_line << "\n> " << std::flush;
                 }
@@ -136,6 +139,22 @@ void run_ai_test_on_folder(const std::string &folderPath)
         return;
     }
 
+    // ** NEW: Ensure output directory exists **
+    if (!std::filesystem::exists(OUTPUT_IMAGE_FOLDER_PATH))
+    {
+        try
+        {
+            std::filesystem::create_directories(OUTPUT_IMAGE_FOLDER_PATH);
+            std::cout << "[AI Test] Created output directory: " << OUTPUT_IMAGE_FOLDER_PATH << std::endl;
+        }
+        catch (const std::exception &e)
+        {
+            std::cerr << "[AI Test] Error creating output directory " << OUTPUT_IMAGE_FOLDER_PATH << ": " << e.what() << std::endl;
+            std::cout << "> " << std::flush;
+            return; // Stop if we can't create output dir
+        }
+    }
+
     int image_count = 0;
     try
     {
@@ -144,17 +163,19 @@ void run_ai_test_on_folder(const std::string &folderPath)
         {
             if (entry.is_regular_file())
             {
-                std::string imagePath = entry.path().string();
+                std::filesystem::path inputPath = entry.path(); // Use path object
+                std::string imagePathStr = inputPath.string();
+
                 // Basic check for image extensions
-                std::string ext = entry.path().extension().string();
+                std::string ext = inputPath.extension().string();
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower); // Convert extension to lower case
                 if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp")
                 {
-                    std::cout << "[AI Test] Processing image: " << imagePath << std::endl;
-                    cv::Mat image = cv::imread(imagePath);
+                    std::cout << "[AI Test] Processing image: " << imagePathStr << std::endl;
+                    cv::Mat image = cv::imread(imagePathStr);
                     if (image.empty())
                     {
-                        std::cerr << "[AI Test] Warning: Could not read image: " << imagePath << std::endl;
+                        std::cerr << "[AI Test] Warning: Could not read image: " << imagePathStr << std::endl;
                         continue;
                     }
                     image_count++;
@@ -162,32 +183,42 @@ void run_ai_test_on_folder(const std::string &folderPath)
                     try
                     {
                         auto start = std::chrono::high_resolution_clock::now();
-                        // Use the detect method from the YOLO12Detector class
-                        // It uses the thresholds defined in YOLO12.hpp by default
-                        std::vector<Detection> result = detector->detect(image);
-                        // Or pass specific thresholds:
-                        // std::vector<Detection> result = detector->detect(image, YOUR_CONF_THRESH, YOUR_IOU_THRESH);
+                        // ** Use the adjustable thresholds **
+                        std::vector<Detection> result = detector->detect(image, DETECT_CONF_THRESHOLD, DETECT_IOU_THRESHOLD);
 
                         auto stop = std::chrono::high_resolution_clock::now();
                         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(stop - start);
                         std::cout << "[AI Test] Detection took: " << duration.count() << " ms. Found " << result.size() << " objects." << std::endl;
 
-                        // Use the drawing method from the YOLO12Detector class
-                        // It uses the internally loaded class names and generated colors
+                        // Draw bounding boxes on the image
                         detector->drawBoundingBox(image, result);
-                        // detector->drawBoundingBoxMask(image, result); // Optional mask drawing
 
-                        cv::imshow("AI Test Result - Press any key", image);
-                        cv::waitKey(0); // Wait indefinitely for a key press
+                        // ** REMOVED Display part that causes crash **
+                        // cv::imshow("AI Test Result - Press any key", image);
+                        // cv::waitKey(0);
+
+                        // ** NEW: Save the image with detections **
+                        std::string outputFilename = inputPath.stem().string() + "_detected" + inputPath.extension().string();
+                        std::string outputPathStr = OUTPUT_IMAGE_FOLDER_PATH + outputFilename;
+
+                        if (cv::imwrite(outputPathStr, image))
+                        {
+                            std::cout << "[AI Test] Saved result to: " << outputPathStr << std::endl;
+                        }
+                        else
+                        {
+                            std::cerr << "[AI Test] Error: Could not save result image to: " << outputPathStr << std::endl;
+                        }
                     }
                     catch (const std::exception &e)
                     {
-                        std::cerr << "[AI Test] Error during detection/visualization on " << imagePath << ": " << e.what() << std::endl;
+                        std::cerr << "[AI Test] Error during detection/saving on " << imagePathStr << ": " << e.what() << std::endl;
                     }
                 }
             }
         }
-        cv::destroyAllWindows(); // Close image windows when done
+        // ** REMOVED as no windows are created **
+        // cv::destroyAllWindows();
     }
     catch (const std::filesystem::filesystem_error &e)
     {
