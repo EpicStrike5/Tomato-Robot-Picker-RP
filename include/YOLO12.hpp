@@ -757,15 +757,22 @@ cv::Mat YOLO12Detector::preprocess(const cv::Mat &image, float *&blob, std::vect
 {
     ScopedTimer timer("preprocessing");
 
+    // ** NEW: Convert BGR image loaded by OpenCV to RGB before processing **
+    cv::Mat imageRGB;
+    cv::cvtColor(image, imageRGB, cv::COLOR_BGR2RGB);
+
     cv::Mat resizedImage;
-    // Resize and pad the image using letterBox utility
-    utils::letterBox(image, resizedImage, inputImageShape, cv::Scalar(114, 114, 114), isDynamicInputShape, false, true, 32);
+    // ** Use imageRGB (the RGB version) for letterboxing **
+    utils::letterBox(imageRGB, resizedImage, inputImageShape, cv::Scalar(114, 114, 114), isDynamicInputShape, false, true, 32);
 
     // Update input tensor shape based on resized image dimensions
     inputTensorShape[2] = resizedImage.rows;
     inputTensorShape[3] = resizedImage.cols;
 
     // Convert image to float and normalize to [0, 1]
+    // NOTE: Normalization happens *after* letterboxing adds padding.
+    // This is usually fine, but sometimes normalization is done before padding.
+    // Let's keep it as is for now, but it's a potential minor difference.
     resizedImage.convertTo(resizedImage, CV_32FC3, 1 / 255.0f);
 
     // Allocate memory for the image blob in CHW format
@@ -781,7 +788,7 @@ cv::Mat YOLO12Detector::preprocess(const cv::Mat &image, float *&blob, std::vect
 
     DEBUG_PRINT("Preprocessing completed")
 
-    return resizedImage;
+    return resizedImage; // Note: the returned Mat isn't directly used later, the blobPtr is.
 }
 // Postprocess function to convert raw model output into detections
 std::vector<Detection> YOLO12Detector::postprocess(
