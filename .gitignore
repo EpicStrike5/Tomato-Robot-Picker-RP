@@ -1,5 +1,6 @@
 #Ai Models 
 AIModel/TomatoDetectBTV1.onnx
+AIModel/TomatoDetectfastBTV1.onnx
 !AIModel/README.md
 
 # IDE specific files (Visual Studio Code)

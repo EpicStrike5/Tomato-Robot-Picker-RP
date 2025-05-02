@@ -1,41 +1,58 @@
 #include "SerialPort.h" // Your serial port library header
 #include <iostream>
 #include <string>
-#include <thread>     // For std::thread
-#include <atomic>     // For std::atomic<bool>
-#include <chrono>     // For std::chrono::milliseconds, std::chrono::seconds
-#include <vector>     // For std::vector
-#include <stdexcept>  // For std::exception
-#include <csignal>    // For signal handling (Ctrl+C)
-#include <filesystem> // For iterating through files (Requires C++17)
-#include <memory>     // For std::shared_ptr
-#include <algorithm>  // For std::transform (used in run_ai_test_on_folder)
+#include <sstream> // ** NEW: For formatting output string **
+#include <thread>
+#include <atomic>
+#include <chrono>
+#include <vector>
+#include <stdexcept>
+#include <csignal>
+#include <filesystem>
+#include <memory>
+#include <algorithm>
+#include <iomanip> // ** NEW: For std::setprecision **
 
-// --- Include headers for YOLO detection (New Header) ---
-#include <opencv2/opencv.hpp> // Still need core OpenCV functionalities
-#include "YOLO12.hpp"         // Include the new detector header
+// --- Include headers for YOLO detection ---
+#include <opencv2/opencv.hpp>
+#include "YOLO12.hpp"
+
+// --- ** NEW: Include headers for RealSense ** ---
+#include <librealsense2/rs.hpp>
+#include "cv-helpers.hpp" // Make sure this is in your include path
 
 // --- Configuration Constants ---
-const std::string SERIAL_PORT = "/dev/ttyACM0"; // CHECK THIS!
+const std::string SERIAL_PORT = "/dev/ttyACM0";
 const speed_t SERIAL_BAUD = B115200;
-// --- ADJUST PATHS FOR YOUR TOMATO MODEL ---
-const std::string TOMATO_MODEL_PATH = "AIModel/TomatoDetectBTV1.onnx"; // ADJUST PATH to your .onnx file
-const std::string TOMATO_CLASS_NAMES_PATH = "AIModel/tomato.names";    // ADJUST PATH to your .names file
-const std::string TEST_IMAGE_FOLDER_PATH = "AIModel/Test_images/";     // ADJUST PATH
-const std::string OUTPUT_IMAGE_FOLDER_PATH = "AIModel/Output_images/"; // ** NEW: Path to save results **
+const std::string TOMATO_MODEL_PATH = "AIModel/TomatoDetectFastBTV2.onnx";
+const std::string TOMATO_CLASS_NAMES_PATH = "AIModel/tomato.names";
+const std::string TEST_IMAGE_FOLDER_PATH = "AIModel/Test_images/";
+const std::string OUTPUT_IMAGE_FOLDER_PATH = "AIModel/Output_images/";
+const std::string REALSENSE_OUTPUT_FOLDER_PATH = "AIModel/Realsense/"; // ** NEW: Output for AINow **
 
-// --- ** NEW: Adjustable Thresholds for Experimentation ** ---
-const float DETECT_CONF_THRESHOLD = 0.4f; // Default 0.4f - Try lowering (e.g., 0.25f)
-const float DETECT_IOU_THRESHOLD = 0.45f; // Default 0.45f - Try adjusting slightly if needed
+// --- Adjustable Thresholds ---
+const float DETECT_CONF_THRESHOLD = 0.40f; // Adjusted based on HUB results
+const float DETECT_IOU_THRESHOLD = 0.60f;  // Adjusted based on HUB results
 
-const bool USE_GPU_IF_AVAILABLE = false; // Set to false for Raspberry Pi CPU usually
+const bool USE_GPU_IF_AVAILABLE = false;
+
+// --- ** NEW: RealSense Constants ** ---
+const int RS_WIDTH = 640;
+const int RS_HEIGHT = 480;
+const int RS_FPS = 30;
 
 // Global atomic flag to signal threads to stop
 std::atomic<bool> keep_running(true);
 
-// Global detector object (using new class)
+// Global detector object
 std::shared_ptr<YOLO12Detector> detector = nullptr;
-// NOTE: classNames and classColors are now managed internally by YOLO12Detector via YOLO12.hpp
+
+// --- ** NEW: Global RealSense Objects ** ---
+rs2::pipeline rs_pipe;                       // Declare pipeline object
+rs2::config cfg;                             // Declare configuration object
+rs2::align align_to_color(RS2_STREAM_COLOR); // Declare alignment object
+rs2_intrinsics depth_intrinsics;             // Store depth sensor intrinsics
+bool realsense_initialized = false;          // Flag to track initialization
 
 // Signal handler function for SIGINT (Ctrl+C)
 void signalHandler(int signum)
@@ -240,6 +257,152 @@ void run_ai_test_on_folder(const std::string &folderPath)
     std::cout << "> " << std::flush; // Re-display prompt
 }
 
+// --- ** NEW: Function to get timestamp for filenames ** ---
+std::string get_timestamp()
+{
+    auto now = std::chrono::system_clock::now();
+    auto now_c = std::chrono::system_clock::to_time_t(now);
+    std::stringstream ss;
+    ss << std::put_time(std::localtime(&now_c), "%Y%m%d_%H%M%S");
+    return ss.str();
+}
+
+void run_ai_on_camera()
+{
+    if (!realsense_initialized)
+    {
+        std::cerr << "\n[AI] Error: RealSense camera not initialized." << std::endl;
+        std::cout << "> " << std::flush;
+        return;
+    }
+    if (!detector)
+    {
+        std::cerr << "\n[AI] Error: YOLO Detector not initialized." << std::endl;
+        std::cout << "> " << std::flush;
+        return;
+    }
+
+    std::cout << "\n[AI] Capturing frame from RealSense..." << std::endl;
+
+    try
+    {
+        rs2::frameset frames = rs_pipe.wait_for_frames();     // Wait for a coherent set of frames
+        auto aligned_frames = align_to_color.process(frames); // Align depth to color viewport
+
+        rs2::video_frame color_frame = aligned_frames.get_color_frame();
+        rs2::depth_frame depth_frame = aligned_frames.get_depth_frame();
+
+        if (!color_frame || !depth_frame)
+        {
+            std::cerr << "[AI] Error: Could not get valid color/depth frame." << std::endl;
+            std::cout << "> " << std::flush;
+            return;
+        }
+
+        // Convert color frame to OpenCV Mat
+        cv::Mat color_mat = frame_to_mat(color_frame); // Using cv-helpers.hpp function
+
+        // --- Run Detection ---
+        auto start = std::chrono::high_resolution_clock::now();
+        std::vector<Detection> detections = detector->detect(color_mat, DETECT_CONF_THRESHOLD, DETECT_IOU_THRESHOLD);
+        auto stop = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(stop - start);
+        std::cout << "[AI] Detection took: " << duration.count() << " ms. Found " << detections.size() << " objects." << std::endl;
+
+        // --- Process Detections for Coordinates ---
+        std::stringstream coord_ss; // To build coordinate string
+        coord_ss << "Detections: ";
+        int detection_count = 0;
+
+        for (const auto &det : detections)
+        {
+            if (det.classId < 0)
+                continue; // Should not happen with YOLO12.hpp but good check
+
+            // Get BBox center
+            int cx = det.box.x + det.box.width / 2;
+            int cy = det.box.y + det.box.height / 2;
+
+            // Clamp coordinates to be within frame dimensions before querying depth
+            cx = std::max(0, std::min(cx, RS_WIDTH - 1));
+            cy = std::max(0, std::min(cy, RS_HEIGHT - 1));
+
+            // Get depth value at center pixel (in meters)
+            float depth_m = depth_frame.get_distance(cx, cy);
+
+            if (depth_m > 0.01)
+            { // Check for valid depth (ignore 0 or very close)
+                // Deproject pixel to 3D point
+                float pixel[2] = {(float)cx, (float)cy};
+                float point[3] = {0.0f, 0.0f, 0.0f}; // X, Y, Z
+                // Use the stored depth intrinsics
+                rs2_deproject_pixel_to_point(point, &depth_intrinsics, pixel, depth_m);
+
+                // Append to string (format: ClassName: [X, Y, Z], )
+                // Assuming detector->classNames exists or get class name via ID
+                // Note: YOLO12.hpp keeps classNames private, so we'll just use ClassID for now.
+                // If you need names, you'd need to modify YOLO12.hpp to expose classNames or reload them here.
+                if (detection_count > 0)
+                    coord_ss << ", ";
+                coord_ss << "ID" << det.classId << ": [" << std::fixed << std::setprecision(3) << point[0] << ", "
+                         << point[1] << ", " << point[2] << "]";
+                detection_count++;
+            }
+            else
+            {
+                if (detection_count > 0)
+                    coord_ss << ", ";
+                coord_ss << "ID" << det.classId << ": [depth_invalid]";
+                detection_count++;
+                std::cout << "[AI] Warning: Invalid depth (0) for detection ID " << det.classId << " at pixel (" << cx << ", " << cy << ")" << std::endl;
+            }
+        }
+
+        // Print coordinate string
+        std::cout << coord_ss.str() << std::endl;
+
+        // --- Save Image ---
+        // Ensure output directory exists
+        if (!std::filesystem::exists(REALSENSE_OUTPUT_FOLDER_PATH))
+        {
+            try
+            {
+                std::filesystem::create_directories(REALSENSE_OUTPUT_FOLDER_PATH);
+                std::cout << "[AI] Created output directory: " << REALSENSE_OUTPUT_FOLDER_PATH << std::endl;
+            }
+            catch (const std::exception &e)
+            {
+                std::cerr << "[AI] Error creating output directory " << REALSENSE_OUTPUT_FOLDER_PATH << ": " << e.what() << std::endl;
+                // Continue without saving if directory creation fails
+            }
+        }
+
+        // Draw boxes on the image
+        detector->drawBoundingBox(color_mat, detections);
+
+        // Generate filename and save
+        std::string timestamp = get_timestamp();
+        std::string output_filename = REALSENSE_OUTPUT_FOLDER_PATH + "capture_" + timestamp + "_detected.jpg";
+        if (cv::imwrite(output_filename, color_mat))
+        {
+            std::cout << "[AI] Saved detection result to: " << output_filename << std::endl;
+        }
+        else
+        {
+            std::cerr << "[AI] Error: Failed to save image to " << output_filename << std::endl;
+        }
+    }
+    catch (const rs2::error &e)
+    {
+        std::cerr << "[AI] RealSense error calling " << e.get_failed_function() << "(" << e.get_failed_args() << "):\n    " << e.what() << std::endl;
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << "[AI] Error during camera processing: " << e.what() << std::endl;
+    }
+    std::cout << "> " << std::flush; // Re-display prompt
+}
+
 // Main function
 int main()
 {
@@ -268,6 +431,40 @@ int main()
             std::cerr << "AI features will be disabled." << std::endl;
             // Decide if you want to exit or continue without AI
             // return 1; // Exit if AI is critical
+        }
+
+        std::cout << "Initializing RealSense D435..." << std::endl;
+        try
+        {
+            // Configure streams
+            cfg.enable_stream(RS2_STREAM_DEPTH, RS_WIDTH, RS_HEIGHT, RS2_FORMAT_Z16, RS_FPS);
+            cfg.enable_stream(RS2_STREAM_COLOR, RS_WIDTH, RS_HEIGHT, RS2_FORMAT_BGR8, RS_FPS); // Request BGR for direct OpenCV use
+
+            // Start pipeline
+            rs2::pipeline_profile profile = rs_pipe.start(cfg);
+
+            // Get depth sensor intrinsics (important for deprojection)
+            rs2::stream_profile depth_stream_profile = profile.get_stream(RS2_STREAM_DEPTH);
+            depth_intrinsics = depth_stream_profile.as<rs2::video_stream_profile>().get_intrinsics();
+            std::cout << "Depth Intrinsics: fx=" << depth_intrinsics.fx << ", fy=" << depth_intrinsics.fy
+                      << ", ppx=" << depth_intrinsics.ppx << ", ppy=" << depth_intrinsics.ppy << std::endl;
+
+            // Allow auto-exposure to stabilize
+            std::cout << "Waiting for auto-exposure..." << std::endl;
+            for (int i = 0; i < 30; ++i)
+                rs_pipe.wait_for_frames();
+            std::cout << "RealSense initialized successfully." << std::endl;
+            realsense_initialized = true;
+        }
+        catch (const rs2::error &e)
+        {
+            std::cerr << "RealSense error calling " << e.get_failed_function() << "(" << e.get_failed_args() << "):\n    " << e.what() << std::endl;
+            std::cerr << "RealSense features will be disabled." << std::endl;
+        }
+        catch (const std::exception &e)
+        {
+            std::cerr << "Error initializing RealSense: " << e.what() << std::endl;
+            std::cerr << "RealSense features will be disabled." << std::endl;
         }
 
         // --- Start Threads ---
@@ -315,20 +512,8 @@ int main()
             }
             else if (trimmed_input == "AINow")
             {
-                // Placeholder for future camera-based detection
-                std::cout << "\n[AI] 'AINow' command received. (Camera detection not implemented yet)..." << std::endl;
-                if (!detector)
-                {
-                    std::cerr << "[AI] Cannot run AINow: Detector not initialized." << std::endl;
-                }
-                else
-                {
-                    // --- Future: Add camera capture and detection logic here ---
-                    std::cout << "[AI] (Placeholder) Would run detection on camera feed now." << std::endl;
-                    // Example: run_ai_on_camera_frame(); // Need to implement this function
-                }
-                std::cout << "> " << std::flush; // Re-display prompt
-                                                 // Decide if you need to send anything to Arduino for this command
+                // ** Call the new camera function **
+                run_ai_on_camera();
             }
             else
             {
@@ -365,32 +550,26 @@ int main()
 
         // --- Cleanup ---
         std::cout << "\n[Main] Shutting down..." << std::endl;
-        keep_running.store(false); // Ensure flag is false
+        keep_running.store(false);
 
-        // Close OpenCV windows just in case they were left open by TestAI interrupt
-        cv::destroyAllWindows();
+        // ** NEW: Stop RealSense pipeline **
+        if (realsense_initialized)
+        {
+            std::cout << "[Main] Stopping RealSense pipeline..." << std::endl;
+            rs_pipe.stop();
+        }
 
         if (reader_thread.joinable())
         {
             reader_thread.join();
         }
         std::cout << "[Main] Reader thread joined." << std::endl;
-        // SerialPort destructor closes the port automatically.
-        // Detector shared_ptr cleans up automatically.
     }
     catch (const std::system_error &e)
-    {
-        std::cerr << "Fatal Error: Serial Port Initialization Failed: " << e.what() << " (code: " << e.code() << ")" << std::endl;
-        // Add troubleshooting tips here if desired
-        std::cerr << "Troubleshooting tips:" << std::endl;
-        std::cerr << " - Is the port name '" << SERIAL_PORT << "' correct? (Check dmesg, ls /dev/ttyACM*)" << std::endl;
-        // ... (rest of tips)
-        return 1;
+    { /* ... Serial Error handling ... */
     }
     catch (const std::exception &e)
-    {
-        std::cerr << "An unexpected error occurred during setup or runtime: " << e.what() << std::endl;
-        return 1;
+    { /* ... General Error handling ... */
     }
 
     std::cout << "[Main] Program finished cleanly." << std::endl;
